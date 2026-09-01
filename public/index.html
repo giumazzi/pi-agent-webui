@@ -78,6 +78,7 @@
   <div style="background: #181825; padding: 1rem 2rem; display: flex; gap: 1rem; border-top: 1px solid #313244;">
     <input type="text" id="user-input" placeholder="Scrivi una domanda o incolla un'immagine (Ctrl+V)..." />
     <button class="btn-send" id="send-btn">Invia</button>
+    <button id="prev-chat-btn" style="background:#45475a; color:#cdd6f4;" title="Scambia con l'ultima chat archiviata">↩️ Chat precedente</button>
     <button id="new-chat-btn" style="background:#45475a; color:#cdd6f4;">🗑️ Nuova chat</button>
   </div>
 
@@ -123,7 +124,9 @@
     });
 
     const STORAGE_KEY = 'pi-agent-conversation';
+    const ARCHIVE_KEY = 'pi-agent-archived-conversation';
     const newChatBtn = document.getElementById('new-chat-btn');
+    const prevChatBtn = document.getElementById('prev-chat-btn');
 
     let conversation = [
       { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
@@ -179,11 +182,41 @@
     }
 
     newChatBtn.addEventListener('click', () => {
+      if (conversation.length > 1) {
+        try {
+          localStorage.setItem(ARCHIVE_KEY, JSON.stringify(conversation));
+        } catch (err) {
+          console.warn('Impossibile archiviare la chat corrente:', err);
+        }
+      }
       conversation = [
         { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
       ];
       chatContainer.innerHTML = '';
-      localStorage.removeItem(STORAGE_KEY);
+      saveConversation();
+    });
+
+    prevChatBtn.addEventListener('click', () => {
+      let archived = null;
+      try {
+        const saved = localStorage.getItem(ARCHIVE_KEY);
+        if (saved) archived = JSON.parse(saved);
+      } catch (err) {
+        console.warn('Impossibile leggere la chat archiviata:', err);
+      }
+      if (!archived || !Array.isArray(archived)) {
+        appendMessage('assistant', 'ℹ️ Nessuna chat precedente archiviata.');
+        return;
+      }
+      // Scambia: la conversazione attuale va in archivio, quella archiviata torna in chat
+      try {
+        localStorage.setItem(ARCHIVE_KEY, JSON.stringify(conversation));
+      } catch (err) {
+        console.warn('Impossibile archiviare la chat corrente:', err);
+      }
+      conversation = archived;
+      saveConversation();
+      renderConversation();
     });
 
     async function loadModels() {
