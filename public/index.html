@@ -129,12 +129,13 @@
     const prevChatBtn = document.getElementById('prev-chat-btn');
 
     let conversation = [
-      { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
+      { role: "system", content: "Sei un agente AI operativo, in esecuzione dentro l'interfaccia web Pi Agent WebUI su un PC Linux locale. Se in questa conversazione hai a disposizione degli strumenti (tool) per eseguire comandi shell, leggere o scrivere file, o cercare sul web, usali direttamente per compiere le azioni richieste, invece di limitarti a scrivere i comandi come testo per l'utente: ogni azione richiede comunque l'approvazione esplicita dell'utente prima di essere eseguita. Se in questa conversazione non hai strumenti disponibili, dillo chiaramente all'utente, senza inventare dettagli su altri programmi, piattaforme o modalità che non conosci con certezza." }
     ];
+    let conversationMetrics = [null];
 
     function saveConversation() {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversation));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ conversation, metrics: conversationMetrics }));
       } catch (err) {
         console.warn('Impossibile salvare la cronologia (spazio esaurito?):', err);
       }
@@ -155,15 +156,15 @@
 
     function renderConversation() {
       chatContainer.innerHTML = '';
-      for (const msg of conversation) {
-        if (msg.role === 'system' || msg.role === 'tool') continue;
+      conversation.forEach((msg, i) => {
+        if (msg.role === 'system' || msg.role === 'tool') return;
         if (msg.role === 'user') {
           const { text, image } = extractUserDisplay(msg.content);
           appendMessage('user', text || '[immagine]', null, image);
         } else if (msg.role === 'assistant' && msg.content && !msg.tool_calls) {
-          appendMessage('assistant', msg.content);
+          appendMessage('assistant', msg.content, conversationMetrics[i] || null);
         }
-      }
+      });
     }
 
     function loadConversation() {
@@ -172,7 +173,13 @@
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
+            // formato precedente, senza metriche salvate
             conversation = parsed;
+            conversationMetrics = parsed.map(() => null);
+            renderConversation();
+          } else if (parsed && Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
+            conversation = parsed.conversation;
+            conversationMetrics = Array.isArray(parsed.metrics) ? parsed.metrics : parsed.conversation.map(() => null);
             renderConversation();
           }
         }
@@ -184,14 +191,15 @@
     newChatBtn.addEventListener('click', () => {
       if (conversation.length > 1) {
         try {
-          localStorage.setItem(ARCHIVE_KEY, JSON.stringify(conversation));
+          localStorage.setItem(ARCHIVE_KEY, JSON.stringify({ conversation, metrics: conversationMetrics }));
         } catch (err) {
           console.warn('Impossibile archiviare la chat corrente:', err);
         }
       }
       conversation = [
-        { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
+        { role: "system", content: "Sei un agente AI operativo, in esecuzione dentro l'interfaccia web Pi Agent WebUI su un PC Linux locale. Se in questa conversazione hai a disposizione degli strumenti (tool) per eseguire comandi shell, leggere o scrivere file, o cercare sul web, usali direttamente per compiere le azioni richieste, invece di limitarti a scrivere i comandi come testo per l'utente: ogni azione richiede comunque l'approvazione esplicita dell'utente prima di essere eseguita. Se in questa conversazione non hai strumenti disponibili, dillo chiaramente all'utente, senza inventare dettagli su altri programmi, piattaforme o modalità che non conosci con certezza." }
       ];
+      conversationMetrics = [null];
       chatContainer.innerHTML = '';
       saveConversation();
     });
@@ -204,17 +212,28 @@
       } catch (err) {
         console.warn('Impossibile leggere la chat archiviata:', err);
       }
-      if (!archived || !Array.isArray(archived)) {
+
+      let archivedConversation, archivedMetrics;
+      if (archived && Array.isArray(archived)) {
+        // formato precedente, senza metriche salvate
+        archivedConversation = archived;
+        archivedMetrics = archived.map(() => null);
+      } else if (archived && Array.isArray(archived.conversation)) {
+        archivedConversation = archived.conversation;
+        archivedMetrics = Array.isArray(archived.metrics) ? archived.metrics : archived.conversation.map(() => null);
+      } else {
         appendMessage('assistant', 'ℹ️ Nessuna chat precedente archiviata.');
         return;
       }
+
       // Scambia: la conversazione attuale va in archivio, quella archiviata torna in chat
       try {
-        localStorage.setItem(ARCHIVE_KEY, JSON.stringify(conversation));
+        localStorage.setItem(ARCHIVE_KEY, JSON.stringify({ conversation, metrics: conversationMetrics }));
       } catch (err) {
         console.warn('Impossibile archiviare la chat corrente:', err);
       }
-      conversation = archived;
+      conversation = archivedConversation;
+      conversationMetrics = archivedMetrics;
       saveConversation();
       renderConversation();
     });
@@ -278,6 +297,7 @@
 
       appendMessage('user', text || '[immagine]', null, imageForDisplay);
       conversation.push({ role: "user", content: userContent });
+      conversationMetrics.push(null);
       saveConversation();
       userInput.value = '';
       clearImagePreview();
@@ -310,6 +330,7 @@
       if (data.type === 'message') {
         appendMessage('assistant', data.message, data.metrics);
         conversation.push({ role: "assistant", content: data.message });
+        conversationMetrics.push(data.metrics || null);
         saveConversation();
       } else if (data.type === 'approval_required') {
         renderApprovalCard(data);
@@ -349,7 +370,10 @@
         });
 
         const data = await res.json();
-        if (data.updatedMessages) conversation = data.updatedMessages;
+        if (data.updatedMessages) {
+          conversation = data.updatedMessages;
+          while (conversationMetrics.length < conversation.length) conversationMetrics.push(null);
+        }
         saveConversation();
 
         card.remove();
