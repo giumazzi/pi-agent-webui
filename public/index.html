@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pi Agent WebUI - Ollama Local</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; height: 100vh; }
+    header { background: #181825; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #313244; }
+    h1 { font-size: 1.2rem; color: #89b4fa; }
+    select { background: #313244; color: #cdd6f4; border: 1px solid #45475a; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem; outline: none; }
+    #chat-container { flex: 1; overflow-y: auto; padding: 2rem; display: flex; flex-direction: column; gap: 1rem; }
+    .message { max-width: 80%; padding: 1rem; border-radius: 8px; line-height: 1.5; white-space: pre-wrap; display: flex; flex-direction: column; }
+    .user { align-self: flex-end; background: #89b4fa; color: #11111b; font-weight: 500; }
+    .assistant { align-self: flex-start; background: #313244; border: 1px solid #45475a; }
+    
+    /* Stile della riga metriche in basso al messaggio */
+    .metrics-bar {
+      margin-top: 0.8rem;
+      padding-top: 0.4rem;
+      border-top: 1px dashed #45475a;
+      font-size: 0.75rem;
+      color: #a6adc8;
+      display: flex;
+      gap: 1.2rem;
+      font-family: monospace;
+    }
+    .metrics-bar span { display: flex; align-items: center; gap: 0.3rem; }
+    .metrics-bar strong { color: #f9e2af; }
+
+    .approval-card { align-self: flex-start; background: #313244; border: 2px solid #f9e2af; padding: 1rem; border-radius: 8px; width: 100%; max-width: 600px; }
+    .approval-card h3 { color: #f9e2af; margin-bottom: 0.5rem; font-size: 1rem; }
+    .approval-card pre { background: #181825; padding: 0.8rem; border-radius: 4px; overflow-x: auto; color: #a6e3a1; font-size: 0.9rem; margin: 0.5rem 0; }
+    .btn-group { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    button { cursor: pointer; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: bold; font-size: 0.9rem; }
+    .btn-approve { background: #a6e3a1; color: #11111b; }
+    .btn-reject { background: #f38ba8; color: #11111b; }
+    .btn-send { background: #89b4fa; color: #11111b; }
+    input-area { background: #181825; padding: 1rem 2rem; display: flex; gap: 1rem; border-top: 1px solid #313244; }
+    input[type="text"] { flex: 1; background: #313244; border: 1px solid #45475a; padding: 0.8rem 1rem; color: #cdd6f4; border-radius: 6px; font-size: 1rem; outline: none; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>🤖 Pi Agent WebUI</h1>
+    <div style="display:flex; gap:1rem; align-items:center;">
+      <div>
+        <label for="model-select">Modello: </label>
+        <select id="model-select"><option>Caricamento modelli...</option></select>
+      </div>
+      <div>
+        <label for="reasoning-select">Ragionamento: </label>
+        <select id="reasoning-select">
+          <option value="none">Nessuno (veloce)</option>
+          <option value="low">Basso</option>
+          <option value="medium">Medio</option>
+          <option value="high">Alto</option>
+        </select>
+      </div>
+      <div>
+        <label for="tools-select">Strumenti: </label>
+        <select id="tools-select">
+          <option value="yes">Sì</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <div id="chat-container"></div>
+
+  <div id="image-preview-bar" style="display:none; background:#181825; padding:0.5rem 2rem; align-items:center; gap:0.8rem; border-top:1px solid #313244;">
+    <img id="image-preview-thumb" style="height:50px; border-radius:6px;" />
+    <button id="remove-image-btn" style="background:#f38ba8; color:#11111b; border:none; border-radius:4px; padding:0.3rem 0.6rem; cursor:pointer;">✕ Rimuovi immagine</button>
+  </div>
+  <div style="background: #181825; padding: 1rem 2rem; display: flex; gap: 1rem; border-top: 1px solid #313244;">
+    <input type="text" id="user-input" placeholder="Scrivi una domanda o incolla un'immagine (Ctrl+V)..." />
+    <button class="btn-send" id="send-btn">Invia</button>
+    <button id="new-chat-btn" style="background:#45475a; color:#cdd6f4;">🗑️ Nuova chat</button>
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chat-container');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const modelSelect = document.getElementById('model-select');
+    const reasoningSelect = document.getElementById('reasoning-select');
+    const toolsSelect = document.getElementById('tools-select');
+    const imagePreviewBar = document.getElementById('image-preview-bar');
+    const imagePreviewThumb = document.getElementById('image-preview-thumb');
+    const removeImageBtn = document.getElementById('remove-image-btn');
+    let pendingImageDataUrl = null;
+
+    function showImagePreview(dataUrl) {
+      pendingImageDataUrl = dataUrl;
+      imagePreviewThumb.src = dataUrl;
+      imagePreviewBar.style.display = 'flex';
+    }
+
+    function clearImagePreview() {
+      pendingImageDataUrl = null;
+      imagePreviewThumb.src = '';
+      imagePreviewBar.style.display = 'none';
+    }
+
+    removeImageBtn.addEventListener('click', clearImagePreview);
+
+    userInput.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type && item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = () => showImagePreview(reader.result);
+          reader.readAsDataURL(file);
+          break;
+        }
+      }
+    });
+
+    const STORAGE_KEY = 'pi-agent-conversation';
+    const newChatBtn = document.getElementById('new-chat-btn');
+
+    let conversation = [
+      { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
+    ];
+
+    function saveConversation() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversation));
+      } catch (err) {
+        console.warn('Impossibile salvare la cronologia (spazio esaurito?):', err);
+      }
+    }
+
+    function extractUserDisplay(content) {
+      if (typeof content === 'string') return { text: content, image: null };
+      if (Array.isArray(content)) {
+        const textPart = content.find(p => p.type === 'text');
+        const imagePart = content.find(p => p.type === 'image_url');
+        return {
+          text: textPart ? textPart.text : '',
+          image: imagePart ? imagePart.image_url.url : null
+        };
+      }
+      return { text: '', image: null };
+    }
+
+    function renderConversation() {
+      chatContainer.innerHTML = '';
+      for (const msg of conversation) {
+        if (msg.role === 'system' || msg.role === 'tool') continue;
+        if (msg.role === 'user') {
+          const { text, image } = extractUserDisplay(msg.content);
+          appendMessage('user', text || '[immagine]', null, image);
+        } else if (msg.role === 'assistant' && msg.content && !msg.tool_calls) {
+          appendMessage('assistant', msg.content);
+        }
+      }
+    }
+
+    function loadConversation() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            conversation = parsed;
+            renderConversation();
+          }
+        }
+      } catch (err) {
+        console.warn('Impossibile caricare la cronologia salvata:', err);
+      }
+    }
+
+    newChatBtn.addEventListener('click', () => {
+      conversation = [
+        { role: "system", content: "Sei un agente AI operativo installato sul PC Linux locale." }
+      ];
+      chatContainer.innerHTML = '';
+      localStorage.removeItem(STORAGE_KEY);
+    });
+
+    async function loadModels() {
+      try {
+        const res = await fetch('/api/models');
+        const models = await res.json();
+        modelSelect.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+      } catch (err) {
+        modelSelect.innerHTML = `<option>Errore caricamento modelli</option>`;
+      }
+    }
+    loadModels();
+
+    function appendMessage(role, text, metrics = null, imageDataUrl = null) {
+      const msg = document.createElement('div');
+      msg.className = `message ${role}`;
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.textContent = text;
+      msg.appendChild(contentDiv);
+
+      if (imageDataUrl) {
+        const img = document.createElement('img');
+        img.src = imageDataUrl;
+        img.style.cssText = 'max-width:240px; border-radius:8px; margin-top:0.5rem; display:block;';
+        msg.appendChild(img);
+      }
+
+      // Se sono presenti le metriche, le mostriamo in fondo al messaggio
+      if (metrics) {
+        const metricsDiv = document.createElement('div');
+        metricsDiv.className = 'metrics-bar';
+        metricsDiv.innerHTML = `
+          <span>⏱️ Tempo: <strong>${metrics.totalTimeSec}s</strong></span>
+          <span>🔢 Token: <strong>${metrics.evalCount}</strong> (in: ${metrics.promptEvalCount})</span>
+          <span>⚡ Velocità: <strong>${metrics.tokPerSec} tok/sec</strong></span>
+        `;
+        msg.appendChild(metricsDiv);
+      }
+
+      chatContainer.appendChild(msg);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const text = userInput.value.trim();
+      if (!text && !pendingImageDataUrl) return;
+
+      const imageForDisplay = pendingImageDataUrl;
+      let userContent;
+      if (pendingImageDataUrl) {
+        userContent = [
+          { type: "text", text: text || "" },
+          { type: "image_url", image_url: { url: pendingImageDataUrl } }
+        ];
+      } else {
+        userContent = text;
+      }
+
+      appendMessage('user', text || '[immagine]', null, imageForDisplay);
+      conversation.push({ role: "user", content: userContent });
+      saveConversation();
+      userInput.value = '';
+      clearImagePreview();
+
+      sendBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: modelSelect.value,
+            messages: conversation,
+            reasoningEffort: reasoningSelect.value,
+            toolsEnabled: toolsSelect.value === 'yes'
+          })
+        });
+
+        const data = await res.json();
+        handleServerResponse(data);
+
+      } catch (err) {
+        appendMessage('assistant', `❌ Errore: ${err.message}`);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    function handleServerResponse(data) {
+      if (data.type === 'message') {
+        appendMessage('assistant', data.message, data.metrics);
+        conversation.push({ role: "assistant", content: data.message });
+        saveConversation();
+      } else if (data.type === 'approval_required') {
+        renderApprovalCard(data);
+      }
+    }
+
+    function renderApprovalCard(data) {
+      const card = document.createElement('div');
+      card.className = 'approval-card';
+      
+      let detailsText = JSON.stringify(data.args, null, 2);
+
+      card.innerHTML = `
+        <h3>⚠️ Autorizzazione di Sicurezza Richiesta</h3>
+        <p>L'agente chiede di eseguire il tool: <strong>${data.toolName}</strong></p>
+        <pre>${detailsText}</pre>
+        <div class="btn-group">
+          <button class="btn-approve" onclick="respondApproval('${data.approvalId}', true, this)">Autorizza</button>
+          <button class="btn-reject" onclick="respondApproval('${data.approvalId}', false, this)">Rifiuta</button>
+        </div>
+      `;
+
+      chatContainer.appendChild(card);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    async function respondApproval(approvalId, approved, btnElement) {
+      const card = btnElement.closest('.approval-card');
+      card.style.opacity = '0.5';
+      card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+      try {
+        const res = await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approvalId, approved })
+        });
+
+        const data = await res.json();
+        if (data.updatedMessages) conversation = data.updatedMessages;
+        saveConversation();
+
+        card.remove();
+        handleServerResponse(data);
+
+      } catch (err) {
+        appendMessage('assistant', `❌ Errore durante la risposta di autorizzazione: ${err.message}`);
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    userInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+    loadConversation();
+  </script>
+</body>
+</html>
